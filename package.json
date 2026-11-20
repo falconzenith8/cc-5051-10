@@ -1,0 +1,12 @@
+{
+  "name": "squad-formation",
+  "private": true,
+  "type": "module",
+  "description": "Top-down squad-formation level: speed- and space-aware fold windows, release gates and a Canvas2D viewport.",
+  "scripts": {
+    "test": "node test/run-tests.mjs",
+    "serve": "node tools/serve.mjs 8137 .",
+    "capture": "node tools/capture.mjs"
+  },
+  "engines": { "node": ">=22" }
+}

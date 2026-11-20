@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>小队编队 · 俯视关卡</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #070d18; --panel: #101a2b; --line: #22344f; --text: #dbe6f5;
+    --dim: #7b8fa9; --accent: #38bdf8; --good: #34d399; --bad: #f87171; --warn: #fbbf24;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 ui-sans-serif, system-ui, "PingFang SC", "Noto Sans CJK SC", sans-serif;
+    display: grid; grid-template-columns: 290px 1fr; height: 100vh; overflow: hidden;
+  }
+  aside {
+    background: var(--panel); border-right: 1px solid var(--line);
+    padding: 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px;
+  }
+  h1 { font-size: 16px; margin: 0; letter-spacing: .02em; }
+  h2 { font-size: 12px; margin: 0 0 6px; color: var(--dim); font-weight: 600; text-transform: uppercase; letter-spacing: .08em; }
+  .blurb { color: var(--dim); font-size: 12.5px; margin: 0; }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; }
+  button {
+    background: #16233a; color: var(--text); border: 1px solid var(--line); border-radius: 7px;
+    padding: 6px 11px; font: inherit; font-size: 13px; cursor: pointer;
+  }
+  button:hover { border-color: #3c556f; background: #1b2b45; }
+  button[aria-pressed="true"] { background: #0e2c44; border-color: var(--accent); color: #e0f5ff; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  .mem {
+    display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid var(--line);
+    border-radius: 8px; background: #0d1626; cursor: grab;
+  }
+  .mem.dragging { opacity: .5; }
+  .mem .dot { width: 14px; height: 14px; border-radius: 50%; flex: none; border: 2px solid #0006; }
+  .mem .slot { margin-left: auto; color: var(--dim); font: 12px ui-monospace, monospace; }
+  .mem.leader { cursor: default; border-style: dashed; }
+  .hint { color: var(--dim); font-size: 11.5px; margin: 4px 0 0; }
+  main { display: flex; flex-direction: column; min-width: 0; }
+  #bar {
+    display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--line);
+    background: #0b1424; flex-wrap: wrap;
+  }
+  #bar .grow { flex: 1; }
+  #title { font-weight: 600; }
+  #status { font: 12px ui-monospace, monospace; color: var(--dim); }
+  #status.ok { color: var(--good); } #status.bad { color: var(--bad); }
+  #canvasWrap { flex: 1; position: relative; min-height: 0; }
+  canvas { display: block; width: 100%; height: 100%; }
+  .scrub { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-top: 1px solid var(--line); background: #0b1424; }
+  input[type=range] { flex: 1; accent-color: var(--accent); }
+  .stats { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font: 12px ui-monospace, monospace; color: var(--dim); }
+  .stats b { color: var(--text); font-weight: 500; text-align: right; }
+  .chk { display: grid; grid-template-columns: 16px 1fr; gap: 3px 6px; font-size: 12px; }
+  .chk .mark { text-align: center; }
+  .chk .ok { color: var(--good); } .chk .no { color: var(--bad); } .chk .sk { color: var(--warn); }
+  .chk small { color: var(--dim); grid-column: 2; margin: -2px 0 4px; }
+  .note { font-size: 11.5px; color: var(--dim); }
+  .kbd { font: 11px ui-monospace, monospace; border: 1px solid var(--line); border-radius: 4px; padding: 1px 4px; color: var(--dim); }
+</style>
+</head>
+<body>
+<aside>
+  <div>
+    <h1>小队编队 · 俯视关卡</h1>
+    <p class="blurb" id="blurb"></p>
+  </div>
+
+  <div>
+    <h2>关卡</h2>
+    <div class="row" id="levels"></div>
+  </div>
+
+  <div>
+    <h2>策略</h2>
+    <div class="row" id="strategies"></div>
+  </div>
+
+  <div>
+    <h2>场景</h2>
+    <div class="row" id="scenarios"></div>
+  </div>
+
+  <div>
+    <h2>入口编组（拖动换位）</h2>
+    <div id="members" style="display:flex;flex-direction:column;gap:5px"></div>
+    <p class="hint">队长固定在队首；其余成员可互换槽位。修改后重跑即可比较收拢窗口。</p>
+  </div>
+
+  <div>
+    <h2>验收</h2>
+    <div class="chk" id="checks"></div>
+  </div>
+
+  <div>
+    <h2>运行数据</h2>
+    <div class="stats" id="stats"></div>
+  </div>
+</aside>
+
+<main>
+  <div id="bar">
+    <span id="title"></span>
+    <span id="status"></span>
+    <span class="grow"></span>
+    <button id="play" aria-pressed="true">暂停</button>
+    <button id="restart">重播</button>
+  </div>
+  <div id="canvasWrap"><canvas id="view"></canvas></div>
+  <div class="scrub">
+    <span class="note">时间轴</span>
+    <input id="scrub" type="range" min="0" max="0" value="0" step="1">
+    <span id="clock" class="note" style="min-width:78px;text-align:right"></span>
+  </div>
+</main>
+
+<script type="module" src="./app.js"></script>
+</body>
+</html>
