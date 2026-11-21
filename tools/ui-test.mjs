@@ -40,7 +40,7 @@ const boot = await page.evaluate(() => ({
   members: document.querySelectorAll('.mem').length,
 }));
 check('page boots with a canvas', boot.canvas);
-check('two levels offered', boot.levels.length === 2, boot.levels.join('/'));
+check('three levels offered', boot.levels.length === 3, boot.levels.join('/'));
 check('five members listed at the entrance', boot.members === 5, String(boot.members));
 
 /* every level x strategy x scenario renders and reports its own status */
@@ -70,6 +70,72 @@ for (const c of combos) {
 }
 const fails = combos.filter((c) => c.status !== 'arrived' && !/堵|未到齐|挤/.test(c.header));
 check('every failure is explained in the status bar', fails.length === 0, JSON.stringify(fails));
+
+/* Level C: clearance preview, formation flip, tail widening, pillar drag */
+await page.evaluate(() => window.__squad.select('C', 'file', 'steady'));
+const clearanceBase = await page.evaluate(() => ({
+  hasClearance: !!window.__squad.clearance,
+  canPass: window.__squad.clearanceReport.canPass,
+  intervals: window.__squad.clearanceReport.intervals.length,
+  checks: document.querySelectorAll('#checks .mark').length,
+  status: document.querySelector('#status').textContent,
+}));
+check('C boots a clearance session with swept intervals', clearanceBase.hasClearance && clearanceBase.intervals > 1,
+  JSON.stringify(clearanceBase));
+check('C file formation passes and reports its verdict', clearanceBase.canPass && clearanceBase.checks === 3,
+  clearanceBase.status);
+
+const flip = await page.evaluate(() => {
+  const base = window.__squad.clearanceReport;
+  const rep = window.__squad.setTemplate('wide');
+  return {
+    canPass: rep.canPass, stop: rep.stop,
+    revalidated: rep.revalidated.length, cells: rep.cells,
+    added: rep.last.changed.added.length,
+    changedSpansPainted: window.__squad.clearanceReport.revalidatedSpans.length,
+    verifyEqual: window.__squad.clearance.verify().equal,
+    baseIntervals: base.intervals.length,
+    status: document.querySelector('#status').textContent,
+  };
+});
+check('flipping to wide finds the bend-pillar stop without re-sweeping everything',
+  !flip.canPass && flip.stop?.kind === 'pillar' && flip.revalidated < flip.cells,
+  JSON.stringify(flip));
+check('the flip report matches the full reference and paints revalidated spans',
+  flip.verifyEqual && flip.added > 0 && flip.changedSpansPainted > 0,
+  JSON.stringify({ verifyEqual: flip.verifyEqual, added: flip.added, spans: flip.changedSpansPainted }));
+
+const widened = await page.evaluate(() => {
+  window.__squad.select('C', 'file', 'steady');
+  const rep = window.__squad.widenOuter(0.10);
+  return {
+    canPass: rep.canPass, revalidated: rep.revalidated.length, cells: rep.cells,
+    verifyEqual: window.__squad.clearance.verify().equal,
+    radiusShown: window.__squad.clearance.index.members.map((m) => +m.radius.toFixed(2)),
+  };
+});
+check('widening the outer kits revalidates only affected cells', widened.revalidated < widened.cells && widened.verifyEqual,
+  JSON.stringify(widened));
+
+const dragged = await page.evaluate(() => {
+  window.__squad.select('C', 'wide', 'steady');
+  const before = window.__squad.clearanceReport.canPass;
+  // drag the pillar onto the wide entrance straight, inside the left band
+  const rep = window.__squad.movePillarTo('P-bend', 2.2, 1.2);
+  const spans = window.__squad.clearanceReport.revalidatedSpans;
+  const onCanvas = spans.length > 0 && spans.every(([a, b]) => Number.isFinite(a) && Number.isFinite(b));
+  return {
+    before, canPass: rep.canPass, stop: rep.stop,
+    revalidated: rep.revalidated.length, spans: spans.length, onCanvas,
+    verifyEqual: window.__squad.clearance.verify().equal,
+  };
+});
+check('dragging the pillar re-validates a local span and reports the new first stop',
+  dragged.canPass === false && dragged.stop?.s < 4 && dragged.revalidated > 0 && dragged.verifyEqual,
+  JSON.stringify(dragged));
+check('the revalidated span is a concrete station interval the preview can paint',
+  dragged.onCanvas && dragged.spans > 0, JSON.stringify(dragged));
+await page.screenshot({ path: 'out/ui-test-c.png' });
 
 /* entrance regroup: swapping two non-leaders changes the computed fold start */
 const regroup = await page.evaluate(() => {

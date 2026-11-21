@@ -1,4 +1,4 @@
-import { buildRoute } from '../geo/route.js';
+import { buildRoute, worldOf } from '../geo/route.js';
 import { makeSquad } from '../sim/formation.js';
 
 /*
@@ -36,8 +36,7 @@ const NODES_B_MAIN = [
   { x: 15.4, y: -0.9, w: 3.10 },
 ];
 
-const NODES_B_SIDE = [
-  { x: 0.0, y: 0.0, w: 3.05 },
+const NODES_B_SIDE = [  { x: 0.0, y: 0.0, w: 3.05 },
   { x: 4.6, y: 0.0, w: 3.05 },
   { x: 7.0, y: -0.45, w: 3.00 },  // branch peels left, still wide
   { x: 10.4, y: -1.55, w: 2.95 }, // side aisle runs parallel, roomy
@@ -49,6 +48,28 @@ const NODES_B_SIDE = [
   { x: 21.3, y: -0.95, w: 1.35 },
   { x: 23.9, y: -0.95, w: 3.10 },
 ];
+
+const NODES_C = [
+  { x: 0.0, y: 0.0, w: 3.2 },
+  { x: 5.0, y: 0.0, w: 3.2 },
+  { x: 7.6, y: 0.0, w: 3.2 },
+  { x: 9.6, y: 1.1, w: 3.2 },   // long left bend
+  { x: 10.2, y: 3.4, w: 3.2 },
+  { x: 10.2, y: 6.2, w: 3.2 },
+  { x: 10.2, y: 7.0, w: 1.35 }, // and a short throat beyond it
+  { x: 10.2, y: 8.2, w: 1.35 },
+  { x: 10.2, y: 11.0, w: 3.0 },
+];
+
+// A pillar on the *outer* edge of the bend. In wide formation the left-hand
+// member's disc sweeps the outside of the turn and clips it; in file the same
+// squad walks the centreline and clears it by >0.6 m.
+function outerPillarOf(route, l = -1.24) {
+  const apex = route.samples.reduce(
+    (a, b) => (Math.abs(b.kappa) > Math.abs(a.kappa) ? b : a), route.samples[0]);
+  const p = worldOf(route, apex.s, l);
+  return { id: 'P-bend', name: '弯外柱', x: p.x, y: p.y, r: 0.22, station: apex.s, lateral: l };
+}
 
 export const SQUAD_DEFS = [
   { id: 'L', name: '队长', color: '#f59e0b', width: 0.54, vFwd: 1.40, vLat: 0.98 },
@@ -84,6 +105,9 @@ export function makeLevels() {
   const routeA = buildRoute('level-a', NODES_A, { title: 'A · 突窄门', round: 0.45, ds: 0.02 });
   const routeBMain = buildRoute('level-b-main', NODES_B_MAIN, { title: 'B · 直门', round: 2.6, ds: 0.02 });
   const routeBSide = buildRoute('level-b-side', NODES_B_SIDE, { title: 'B · 侧廊', round: 2.6, ds: 0.02 });
+  const routeC = buildRoute('level-c', NODES_C, { title: 'C · 弯外柱', round: 1.8, ds: 0.02 });
+  const pillarC = outerPillarOf(routeC);
+  const squadC = makeSquad(SQUAD_DEFS);
 
   return [
     {
@@ -133,6 +157,34 @@ export function makeLevels() {
         'side：换走侧廊；early/wait：仍走直门，靠等队与提前收拢换取通过',
       ],
     },
+    {
+      id: 'C',
+      title: 'C · 弯外柱',
+      blurb: '队伍中心走的还是一条路：先是长左弯，再是一道 1.35 m 窄门。'
+        + '但横队外沿会扫过弯道外侧，柱子正立在那里；换纵队后同一批人从中心线通过，柱子让开。'
+        + '净空按“每名成员沿路线的扫掠区间”缓存，而不是按小队中心点：'
+        + '拖柱子、让外侧队员换更宽的装备、切换队形时，都只重验真正受影响的路段。',
+      route: routeC,
+      squad: squadC,
+      pillars: [pillarC],
+      gateStation: gateStationOf(routeC),
+      startStation: 4.20,
+      leaderSpeed: 1.30,
+      strategies: ['wait', 'early', 'file', 'wide'],
+      defaultStrategy: 'file',
+      startArea: { from: 3.6, to: 4.8 },
+      scenarios: SCENARIOS,
+      entryLabel: '弯道 + 窄门',
+      clearance: {
+        template: 'file',
+        pillar: { ...pillarC },
+      },
+      notes: [
+        '柱子立在外弯；横队左翼扫到它，纵队从中心线通过',
+        '同一队心、同一路线，只把外侧成员装备加宽，净空是否失效可逐段比对',
+        '拖动柱子只重验其可达范围内的路段；转角不确定处回退到全体成员细扫',
+      ],
+    },
   ];
 }
 
@@ -140,4 +192,4 @@ export function getLevel(id) {
   return makeLevels().find((l) => l.id === id);
 }
 
-export { NODES_A, NODES_B_MAIN, NODES_B_SIDE, SCENARIOS };
+export { NODES_A, NODES_B_MAIN, NODES_B_SIDE, NODES_C, SCENARIOS };

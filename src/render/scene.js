@@ -19,6 +19,10 @@ const COLORS = {
   gap: '#22d3ee',
   good: '#34d399',
   bad: '#f87171',
+  pillar: '#94a3b8',
+  sweepClear: '#22d3ee',
+  sweepBlocked: '#f87171',
+  revalidated: '#fbbf24',
 };
 
 export function makeTransform(route, width, height, padding = 30) {
@@ -170,8 +174,87 @@ export function drawStop(ctx, route, tr, result, opts = {}) {
   ctx.restore();
 }
 
-export function label(ctx, text, x, y, color, font, align = 'center') {
+/** Pillars, as solid circles with a rim. */
+export function drawPillars(ctx, route, tr, pillars, opts = {}) {
+  for (const p of pillars ?? []) {
+    const c = tr.toScreen({ x: p.x, y: p.y });
+    const r = Math.max(3, p.r * tr.scale);
+    ctx.save();
+    ctx.beginPath(); ctx.arc(c.x, c.y, r, 0, Math.PI * 2);
+    ctx.fillStyle = opts.dragging === p.id ? COLORS.revalidated : COLORS.pillar;
+    ctx.fill();
+    ctx.lineWidth = opts.highlight === p.id ? 3 : 1.5;
+    ctx.strokeStyle = opts.highlight === p.id ? '#fff' : 'rgba(0,0,0,0.5)';
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+/** World point hit test for a pillar under the cursor (screen coords). */
+export function pillarAt(pillars, tr, sx, sy, slopPx = 10) {
+  for (const p of pillars ?? []) {
+    const c = tr.toScreen({ x: p.x, y: p.y });
+    if (Math.hypot(c.x - sx, c.y - sy) <= Math.max(6, p.r * tr.scale) + slopPx) return p;
+  }
+  return null;
+}
+
+/**
+ * The swept clearance band along the route, drawn per station interval.
+ * `intervals` come from the clearance session. Each region carries the real
+ * lateral extent of the members swept there (`span.lo`..`span.hi`), so the
+ * drawn band is the actual ground the bodies cover — not a decorative width.
+ * `revalidated` is the set of station spans the last edit re-checked.
+ */
+export function drawSweep(ctx, route, tr, intervals, opts = {}) {
+  if (!intervals?.length) return;
   ctx.save();
+  ctx.lineCap = 'round';
+  for (const reg of intervals) {
+    const clear = reg.status === 'clear';
+    const color = clear ? COLORS.sweepClear : reg.status === 'blocked' ? COLORS.sweepBlocked : COLORS.dim;
+    const lo = reg.span ? reg.span.lo : -0.5;
+    const hi = reg.span ? reg.span.hi : 0.5;
+    ctx.globalAlpha = opts.alpha ?? 0.26;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = Math.max(2, (opts.bandPx ?? 8));
+    for (const lateral of [lo, hi]) {
+      ctx.beginPath();
+      let started = false;
+      for (let s = reg.from; s <= reg.to + 1e-9; s += 0.08) {
+        const f = frameAt(route, Math.min(s, route.length));
+        const p = tr.toScreen({ x: f.p.x + f.normal.x * lateral, y: f.p.y + f.normal.y * lateral });
+        if (!started) { ctx.moveTo(p.x, p.y); started = true; } else ctx.lineTo(p.x, p.y);
+      }
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
+/** Halo around the station spans that the last edit revalidated. */
+export function drawRevalidated(ctx, route, tr, spans, opts = {}) {
+  if (!spans?.length) return;
+  ctx.save();
+  ctx.globalAlpha = 0.18;
+  ctx.strokeStyle = COLORS.revalidated;
+  ctx.lineWidth = Math.max(6, (opts.widthPx ?? 14));
+  ctx.setLineDash([5, 5]);
+  for (const span of spans) {
+    const [from, to] = Array.isArray(span) ? span : [span.from, span.to];
+    ctx.beginPath();
+    let started = false;
+    for (let s = from; s <= to + 1e-9; s += 0.08) {
+      const f = frameAt(route, Math.min(s, route.length));
+      const p = tr.toScreen(f.p);
+      if (!started) { ctx.moveTo(p.x, p.y); started = true; } else ctx.lineTo(p.x, p.y);
+    }
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+export function label(ctx, text, x, y, color, font, align = 'center') {  ctx.save();
   ctx.font = font;
   const w = ctx.measureText(text).width;
   const bx = align === 'center' ? x - w / 2 : align === 'right' ? x - w : x;
@@ -196,9 +279,17 @@ export function clear(ctx, w, h) {
  */
 export function drawScene(ctx, state) {
   const { route, plan, squad, tr, width, height, trace, members, result, title, subtitle, ascii } = state;
+  const { pillars, clearance, draggingPillar } = state;
   clear(ctx, width, height);
   drawRoute(ctx, route, tr);
   drawTrails(ctx, route, tr, trace, squad);
+  if (pillars?.length) {
+    if (clearance) drawSweep(ctx, route, tr, clearance.intervals, { alpha: 0.22 });
+    drawPillars(ctx, route, tr, pillars, { dragging: draggingPillar });
+  }
+  if (clearance?.revalidatedSpans?.length) {
+    drawRevalidated(ctx, route, tr, clearance.revalidatedSpans);
+  }
   if (plan) {
     drawReserved(ctx, route, tr, plan, squad);
     drawNarrowGap(ctx, route, tr, plan, { ascii });

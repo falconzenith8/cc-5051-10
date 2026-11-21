@@ -11,7 +11,7 @@ and the headless captures.
 ## Run
 
 ```bash
-npm test              # integration tests (strategy matrix + acceptance)
+npm test              # integration tests + clearance tests + headless DOM smoke
 npm run serve         # http://localhost:8137/web/
 ```
 
@@ -73,12 +73,98 @@ ignores the gate, `none` never folds.
   tight.
 - **B · 侧廊** — the same 1.35 m door twice: a direct route with its own short
   throat, and a long side aisle with room to pre-file.
+- **C · 弯外柱** — a long left bend whose outer apex carries a pillar, followed
+  by a short 1.35 m throat. The wide formation clips the pillar with 阿岚; the
+  file formation slips past it. This level is checked by the per-member
+  clearance system below, and its preview lets you drag the pillar.
 
 Each level has a steady squad and a scenario where rear member 小满 temporarily
 lags (reduced forward and lateral speed for a few seconds). Waiting for the
 tail, folding early, and taking the side aisle each absorb the lag differently;
 the tests assert that wait/early/side arrive while `none` jams in the door and
 `rush` tears away from the lagging member.
+
+## Clearance (`src/sim/clearance.js`, `src/sim/clearance-session.js`)
+
+The planner answers "when should the squad fold?". The clearance system answers
+"can this *formation* physically get through, and where does it stop?" — with a
+cache keyed on the route and the members, **never on a squad-centre point**.
+
+**Units.** The route is cut into 0.4 m *cells* (50 for Level C). Each cell
+stores its tangent frame, worst wall half-width, curvature pad, and an
+`uncertain` flag: true where the curvature is sharp, the width jumps, or a node
+falls inside the cell. For every cell and every member the cache holds a
+verdict and the failure record (member, kind, station, margin).
+
+**Sweep.** `evaluateCell` walks the member's slot lateral plus its radius along
+the cell's fine station grid, and tests both walls (via the conservative
+`capLowerBound`) and pillars. Each cell keeps the set of members it actually
+swept (`covMembers`) and the pillars it actually tested, so a clean cell is a
+claim about named bodies, not a scalar.
+
+**Safe-skip certificates.** A cell can skip a member only when both hold:
+
+    walls:   capLowerBound(cell, r) >= edge - small tolerance
+    pillars: no pillar's station window can reach the band's lateral reach
+
+`cellCoverage` records which members were skipped and why. `stats.skipped`
+counts those skipped member checks; `stats.checks` counts the ones performed.
+Uncertain cells never take a skip: they drop to the 0.02 m fallback grid and
+sweep **all** members, so a corner is never certified by coarser geometry. That
+is the rule this feature is built around — speed must come from provably-safe
+skips, never from reducing collider precision.
+
+**Swept intervals.** `sweptIntervals` merges per-cell verdicts into contiguous
+`clear` / `blocked` / `unknown` spans. Each span carries the members swept
+there, the real lateral band they cover (`span:{lo,hi}`), and their `reach`, so
+the preview draws the ground the bodies actually occupy. A blocked span names
+the bodies that broke it.
+
+**Incremental operations** (`ClearanceSession`):
+
+| operation | revalidates | why |
+| --- | --- | --- |
+| drag a pillar (`setPillars`) | cells within `maxEdge + r + pad` of the moved station, old and new | only those can newly touch or clear the band |
+| widen a tail member (`setMemberRadius`) | cells whose prior verdict failed, whose wall is near the new reach, or lie near a pillar | only its own band changed |
+| flip formation (`setTemplate`) | cells reachable by slots whose lateral offset actually moved | unchanged slots keep their verdicts |
+| widen every outer kit (`widenOuterMembers`) | union of the per-slot radius windows | centre path unchanged, only bands grow |
+
+Every update returns the work done (`stats`), the cells revalidated, the
+`firstStop`, and a `changed` diff of spans that truly flipped state.
+
+**Full reference.** `fullReference(..., {strict:true})` disables every skip and
+cache and sweeps all members on the fine grid. `session.verify()` compares the
+incremental per-cell, per-member verdicts against it and asserts equality — the
+tests run this after each operation and after 12 random pillar drags.
+
+**Level C measurements.** Full reference = 250 member checks (50 cells × 5).
+
+    baseline wide : 180 checks, 70 skipped (28%), 32 corner fallbacks -> stop s=9.58 阿岚
+    baseline file : 160 checks, 90 skipped (36%), 32 corner fallbacks -> passes
+    file -> wide  : revalidates 26/50 cells (12 narrow-road, 14 wide-road),
+                    125 checks, 21 corner fallbacks, 12 spans newly fail
+    wide -> file  : revalidates 26/50 cells, 105 checks, 12 spans recover
+    tail +0.22 m  : revalidates 10/50 cells (4 narrow, 6 wide), 38 checks
+    pillar drag   : revalidates 8-10/50 cells for a 0.6-2.5 m move, 40-50 checks
+
+So on the narrow road every affected cell is recomputed at full member width
+(the fallback sweeps all members at corners); the savings come entirely from
+the wide road, where cells certify themselves per member. On Level C's wide
+formation, 68 of the 122 checks on wide-road cells are skipped by certificate,
+and on the file formation 90 of 160.
+
+**Same centre path, wider outer kit.** `widenOuterMembers` is the case a
+centre-point cache cannot represent: slots and route are identical, only the
+outer members' radii grow (#2-#5 by +0.10 m). The session reports 0 revalidated
+cells when the gain stays inside the certified clearance, and 10-12 cells once
+a band reaches the wall or a pillar — then it re-checks only those.
+
+**First stop per switch.** `firstStop` returns the earliest failing station
+along travel with the responsible body. Flipping file → wide moves the stop
+from "passes" to `s=9.58 阿岚 (pillar)` at the bend; dragging a pillar onto the
+entrance moves it to `s=2.00 金石`; an oversized tail makes the throat the
+first stop instead. There is no aggregate "formation fits" boolean without this
+per-body station.
 
 ## Acceptance (`test/acceptance.js`)
 
@@ -95,3 +181,11 @@ cyan cross-bar at the narrowest gap, and a red stop marker with its station on
 failure. The entrance list lets you drag non-leader members between slots; the
 planner is recomputed immediately, so the fold window visibly changes. Playback
 and scrubbing follow the recorded trace.
+
+On Level C the preview instead paints the clearance result: a thin band at each
+member's real lateral extent along every swept span, red where a span fails, a
+solid pillar (yellow while dragged), and yellow dashed halos over the cells the
+last edit revalidated. Dragging a pillar recomputes only the cells it can reach,
+so the halo visibly shrinks and the first-stop marker moves live. A compact
+report beside the canvas lists the revalidated cell count, member checks,
+skipped checks, corner fallbacks, and how many spans truly failed or recovered.
